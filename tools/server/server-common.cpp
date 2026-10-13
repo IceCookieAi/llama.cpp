@@ -9,6 +9,7 @@
 
 #include "server-common.h"
 
+#include <algorithm>
 #include <random>
 #include <sstream>
 #include <fstream>
@@ -1266,6 +1267,76 @@ server_tokens tokenize_oai_content_array(const llama_vocab * vocab, mtmd_context
     return process_mtmd_prompt(mctx, prompt, files, init_opt);
 }
 
+// A tool_choice entry names its function either directly or nested, depending on which OpenAI
+// API shape the client speaks. Accept both; return an empty string when neither is present.
+static std::string oaicompat_tool_choice_name(const json & entry) {
+    if (!entry.is_object()) {
+        return "";
+    }
+    if (entry.contains("name") && entry.at("name").is_string()) {
+        return entry.at("name").get<std::string>();
+    }
+    if (entry.contains("function") && entry.at("function").is_object()) {
+        const auto & function = entry.at("function");
+        if (function.contains("name") && function.at("name").is_string()) {
+            return function.at("name").get<std::string>();
+        }
+    }
+    return "";
+}
+
+// Reads tool_choice in all shapes OpenAI defines and reports the narrowed set separately.
+// Reading it as a plain string turned every object form into "auto" without a word, so a caller
+// that believed it had constrained the model had not: the grammar still offered every tool.
+static std::string oaicompat_tool_choice_parse(const json & body, std::vector<std::string> & allowed) {
+    if (!body.contains("tool_choice")) {
+        return "auto";
+    }
+
+    const json & tool_choice = body.at("tool_choice");
+    if (tool_choice.is_string()) {
+        return tool_choice.get<std::string>();
+    }
+    if (!tool_choice.is_object()) {
+        throw std::runtime_error("Invalid tool_choice: expected a string or an object");
+    }
+
+    const std::string type = json_value(tool_choice, "type", std::string());
+    if (type == "function") {
+        const std::string name = oaicompat_tool_choice_name(tool_choice);
+        if (name.empty()) {
+            throw std::runtime_error("tool_choice of type 'function' carries no function name");
+        }
+        allowed.push_back(name);
+        return "required";
+    }
+    if (type == "allowed_tools") {
+        // Chat Completions nests the payload, Responses keeps it flat. Take whichever arrived.
+        const json & spec = tool_choice.contains("allowed_tools") && tool_choice.at("allowed_tools").is_object()
+                                ? tool_choice.at("allowed_tools")
+                                : tool_choice;
+        const std::string mode = json_value(spec, "mode", std::string("auto"));
+        if (mode != "auto" && mode != "required") {
+            throw std::runtime_error("Invalid tool_choice mode: " + mode);
+        }
+        if (spec.contains("tools") && spec.at("tools").is_array()) {
+            for (const auto & entry : spec.at("tools")) {
+                const std::string name = oaicompat_tool_choice_name(entry);
+                if (name.empty()) {
+                    throw std::runtime_error("tool_choice lists a tool without a function name");
+                }
+                allowed.push_back(name);
+            }
+        }
+        if (allowed.empty()) {
+            throw std::runtime_error("tool_choice of type 'allowed_tools' lists no tools");
+        }
+        return mode;
+    }
+
+    throw std::runtime_error("Invalid tool_choice type: " + (type.empty() ? tool_choice.dump() : type));
+}
+
 // used by /chat/completions endpoint
 json oaicompat_chat_params_parse(
     const llama_vocab * vocab,
@@ -1279,7 +1350,8 @@ json oaicompat_chat_params_parse(
     auto tools = json_value(body, "tools", json());
     auto has_tools = tools.is_array() && !tools.empty();
     auto stream = json_value(body, "stream", false);
-    auto tool_choice = json_value(body, "tool_choice", std::string("auto"));
+    std::vector<std::string> allowed_tool_names;
+    auto tool_choice = oaicompat_tool_choice_parse(body, allowed_tool_names);
 
     if (!opt.use_jinja) {
         if (has_tools) {
@@ -1363,6 +1435,17 @@ json oaicompat_chat_params_parse(
     inputs.messages               = common_chat_msgs_parse_oaicompat(messages);
     inputs.tools                  = common_chat_tools_parse_oaicompat(tools);
     inputs.tool_choice            = common_chat_tool_choice_parse_oaicompat(tool_choice);
+    inputs.allowed_tool_names     = allowed_tool_names;
+
+    // A name that matches nothing would quietly empty the grammar's alternatives, which is the
+    // silent failure this whole path exists to remove. Say so instead.
+    for (const auto & name : inputs.allowed_tool_names) {
+        const bool declared = std::any_of(inputs.tools.begin(), inputs.tools.end(),
+                                          [&name](const common_chat_tool & tool) { return tool.name == name; });
+        if (!declared) {
+            throw std::runtime_error("tool_choice restricts to '" + name + "', which is not among the declared tools");
+        }
+    }
     inputs.json_schema            = json_schema.is_null() ? "" : json_schema.dump();
     inputs.grammar                = grammar;
     inputs.use_jinja              = opt.use_jinja;

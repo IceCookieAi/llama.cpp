@@ -1611,6 +1611,36 @@ peg_test_builder peg_tester::test(const std::string & input) {
     return peg_test_builder(*this, input);
 }
 
+// A named choice asks for that call itself; plain "required" still accepts a preamble (Qwen3.5 cases above).
+static void test_named_tool_choice_forbids_preamble() {
+    LOG_DBG("%s\n", __func__);
+    auto tmpls = read_templates("models/templates/Qwen3.5-4B.jinja");
+    common_chat_templates_inputs params;
+    params.messages              = { message_user };
+    params.tools                 = { run_in_terminal_tool };
+    params.tool_choice           = COMMON_CHAT_TOOL_CHOICE_REQUIRED;
+    params.allowed_tool_names    = { "run_in_terminal" };
+    params.enable_thinking       = true;
+    params.reasoning_format      = COMMON_REASONING_FORMAT_AUTO;
+    params.add_generation_prompt = true;
+    const std::string call =
+        "<tool_call>\n<function=run_in_terminal>\n<parameter=command>\npwd\n</parameter>\n</function>\n</tool_call>";
+    auto finish = [&](const std::string & output) -> common_chat_msg {
+        common_chat_session session(tmpls.get(), nullptr, params, common_chat_session_params{});
+        common_params_sampling sampling;
+        session.apply_sampling(sampling);
+        return session.finish(common_chat_input(output));
+    };
+    assert_equals((size_t) 1, finish("</think>\n\n" + call).tool_calls.size());
+    bool rejected = false;
+    try {
+        finish("</think>\n\nLet me inspect the current directory.\n" + call);
+    } catch (const std::exception &) {
+        rejected = true;
+    }
+    assert_equals(true, rejected);
+}
+
 static void test_msgs_oaicompat_json_conversion() {
     LOG_DBG("%s\n", __func__);
     std::vector<common_chat_msg> msgs{
@@ -8088,6 +8118,7 @@ int main(int argc, char ** argv) {
     {
         test_msg_diffs_compute();
         test_msgs_oaicompat_json_conversion();
+        test_named_tool_choice_forbids_preamble();
         test_msg_token_delimiters_split();
         test_tools_oaicompat_json_conversion();
         test_convert_responses_to_chatcmpl();

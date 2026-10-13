@@ -263,6 +263,11 @@ struct common_chat_templates_inputs {
     // Parameters below only supported when use_jinja is true
     std::vector<common_chat_tool>         tools;
     common_chat_tool_choice               tool_choice         = COMMON_CHAT_TOOL_CHOICE_AUTO;
+    // Narrows the GRAMMAR to a subset of `tools` while the prompt still declares all of them.
+    // Dropping a tool from `tools` instead would shift the rendered prefix and cost a full
+    // prefill on every switch; the grammar is built after the prompt and costs nothing.
+    // Empty means "no restriction". Honoured only when tool_choice is REQUIRED.
+    std::vector<std::string>              allowed_tool_names;
     bool                                  parallel_tool_calls = false;
     common_reasoning_format               reasoning_format    = COMMON_REASONING_FORMAT_NONE; // TODO: refactor this to "bool enable_thinking"
     bool                                  enable_thinking     = true;

@@ -1289,6 +1289,7 @@ static common_chat_params common_chat_templates_apply_jinja(const struct common_
     }
     params.messages              = render_message_to_json(*messages_to_render, tmpl.original_caps());
     params.tool_choice           = inputs.tool_choice;
+    params.allowed_tool_names    = inputs.allowed_tool_names;
     params.reasoning_format      = inputs.reasoning_format;
     params.enable_thinking       = inputs.enable_thinking;
     params.grammar               = inputs.grammar;

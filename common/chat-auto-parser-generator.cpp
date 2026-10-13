@@ -220,9 +220,11 @@ common_peg_parser analyze_tools::build_tool_parser_json_native(parser_build_cont
             format.fun_name_is_key, format.id_field, format.gen_id_field, format.parameter_order, format.openai_wrapper_trigger);
     }
 
+    const bool no_preamble = inputs.forces_named_call();
+
     // Handle content wrappers if present
     if (ctx.content && ctx.content->is_always_wrapped()) {
-        auto wrapped_content = ctx.content->build_optional_wrapped(ctx);
+        auto wrapped_content = no_preamble ? p.eps() : ctx.content->build_optional_wrapped(ctx);
         return ctx.reasoning_parser + wrapped_content + tools_parser + p.end();
     }
 
@@ -233,7 +235,8 @@ common_peg_parser analyze_tools::build_tool_parser_json_native(parser_build_cont
         tool_start = format.per_call_start;
     }
 
-    return ctx.reasoning_parser + p.optional(p.content(p.until(tool_start))) + tools_parser + p.end();
+    auto content_before_tools = no_preamble ? p.eps() : p.optional(p.content(p.until(tool_start)));
+    return ctx.reasoning_parser + content_before_tools + tools_parser + p.end();
 }
 
 common_peg_parser analyze_tools::build_func_parser(common_chat_peg_builder & p, const std::string & name,
@@ -350,9 +353,10 @@ common_peg_parser analyze_tools::build_tool_parser_tag_json(parser_build_context
         tool_calls = p.optional(tool_calls);
     }
 
-    std::string trigger_marker       = !format.section_start.empty() ? format.section_start : format.per_call_start;
-    auto        content_before_tools = trigger_marker.empty() ? p.eps() : p.until(trigger_marker);
-    return ctx.reasoning_parser + p.optional(p.content(content_before_tools)) + tool_calls + p.end();
+    std::string trigger_marker = !format.section_start.empty() ? format.section_start : format.per_call_start;
+    auto content_before_tools = (inputs.forces_named_call() || trigger_marker.empty()) ?
+        p.eps() : p.optional(p.content(p.until(trigger_marker)));
+    return ctx.reasoning_parser + content_before_tools + tool_calls + p.end();
 }
 
 common_peg_parser analyze_tools::build_tool_parser_tag_tagged(parser_build_context & ctx) const {
@@ -469,9 +473,10 @@ common_peg_parser analyze_tools::build_tool_parser_tag_tagged(parser_build_conte
         tool_calls = p.optional(tool_calls);
     }
 
-    std::string trigger_marker       = !format.section_start.empty() ? format.section_start : format.per_call_start;
-    auto        content_before_tools = trigger_marker.empty() ? p.eps() : p.until(trigger_marker);
-    return ctx.reasoning_parser + p.optional(p.content(content_before_tools)) + tool_calls + p.end();
+    std::string trigger_marker = !format.section_start.empty() ? format.section_start : format.per_call_start;
+    auto content_before_tools = (inputs.forces_named_call() || trigger_marker.empty()) ?
+        p.eps() : p.optional(p.content(p.until(trigger_marker)));
+    return ctx.reasoning_parser + content_before_tools + tool_calls + p.end();
 }
 
 }  // namespace autoparser

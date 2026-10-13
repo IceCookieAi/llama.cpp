@@ -6,6 +6,7 @@
 #include "peg-parser.h"
 #include "json.h"
 
+#include <algorithm>
 #include <chrono>
 #include <optional>
 #include <string>
@@ -55,6 +56,8 @@ struct generation_params {
     json                                  messages;
     json                                  tools;
     common_chat_tool_choice               tool_choice = COMMON_CHAT_TOOL_CHOICE_AUTO;
+    // Grammar-only restriction; see common_chat_templates_inputs::allowed_tool_names.
+    std::vector<std::string>              allowed_tool_names;
     json                                  json_schema;
     bool                                  parallel_tool_calls = true;
     common_reasoning_format               reasoning_format    = COMMON_REASONING_FORMAT_AUTO;
@@ -74,6 +77,18 @@ struct generation_params {
 
     bool has_continuation() const {
         return continue_final_message != COMMON_CHAT_CONTINUATION_NONE && !continue_msg.empty();
+    }
+
+    // Whether the grammar may offer this tool. Unrestricted unless the caller narrowed the set.
+    bool tool_allowed(const std::string & name) const {
+        return allowed_tool_names.empty() ||
+               std::find(allowed_tool_names.begin(), allowed_tool_names.end(), name) != allowed_tool_names.end();
+    }
+
+    // A named choice asks for that call itself, so no content may precede it. Plain "required" keeps
+    // allowing a preamble: it only demands that some call follows.
+    bool forces_named_call() const {
+        return tool_choice == COMMON_CHAT_TOOL_CHOICE_REQUIRED && !allowed_tool_names.empty();
     }
 };
 

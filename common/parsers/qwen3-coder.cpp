@@ -97,6 +97,13 @@ common_chat_params common_chat_params_init_qwen3_coder(const common_chat_templat
                 const auto & function = tool.at("function");
                 std::string  name     = function.at("name");
 
+                // Restricted set: the prompt keeps declaring every tool, only the grammar narrows.
+                // Dropping the tool from the prompt instead would shift the prefix and force a full
+                // prefill on every switch between turn kinds.
+                if (!inputs.tool_allowed(name)) {
+                    return;
+                }
+
                 std::vector<common_peg_parser> required_args;
                 std::vector<common_peg_parser> optional_args;
 
@@ -166,8 +173,11 @@ common_chat_params common_chat_params_init_qwen3_coder(const common_chat_templat
             auto calls      = inputs.parallel_tool_calls ? tool_call_first + p.zero_or_more(tool_call) : tool_call_first;
             auto tool_calls = p.trigger_rule("tool-call-root", p.repeat(calls, min_calls, 1));
 
-            return generation_prompt +
-                   (reasoning << p.content(p.until_one_of(tool_call_starts)) << tool_calls);
+            auto content_before_tools = inputs.forces_named_call()
+                ? p.eps()
+                : p.content(p.until_one_of(tool_call_starts));
+
+            return generation_prompt + (reasoning << content_before_tools << tool_calls);
         }
 
         // Content only parser
